@@ -95,15 +95,23 @@ class EcommerceDefaults:
         positions.sort(key=lambda x: x[0])
         return positions[0][1], positions[-1][1]
 
+    @staticmethod
+    def _is_automap_blacklisted(column_name: str) -> bool:
+        return "return" in str(column_name).strip().lower()
+
     def detect_ecommerce_defaults(self, columns: list[str]) -> dict[str, Any]:
+        # Exclude return-address columns so they are never auto-mapped into
+        # delivery address / town / postcode / service fields.
+        eligible = [c for c in columns if not self._is_automap_blacklisted(c)]
+
         defaults: dict[str, Any] = {}
 
         for target_key, aliases in ECOMMERCE_HEADER_SYNONYMS.items():
-            match = self.best_header_match(columns, aliases)
+            match = self.best_header_match(eligible, aliases)
             if match:
                 defaults[target_key] = match
 
-        start, end = self.detect_address_range(columns,town_col=defaults.get("town_column"),county_col=defaults.get("county_column"),
+        start, end = self.detect_address_range(eligible,town_col=defaults.get("town_column"),county_col=defaults.get("county_column"),
                                                postcode_col=defaults.get("postcode_column"),)
         if start:
             defaults["address_start"] = start

@@ -55,11 +55,18 @@ class EcommerceServices:
         for row in rows:
             new_code = self.normalise_service_code(row.get("new_code"))
             old_code = self.normalise_service_code(row.get("old_code"))
+            replacement_code = self.normalise_service_code(row.get("replacement_code"))
 
             if new_code:
                 by_new[new_code] = row
             if old_code:
                 by_old[old_code] = row
+            # After use_replacement_service_code converts codes to replacement_code
+            # form, both collect_service_resolution_state and
+            # split_valid_and_service_rejects must be able to find those codes.
+            # Index replacement_code in by_new if it isn't already mapped.
+            if replacement_code and replacement_code not in by_new:
+                by_new[replacement_code] = row
 
         self._rule_maps_cache = (by_new, by_old)
         return self._rule_maps_cache

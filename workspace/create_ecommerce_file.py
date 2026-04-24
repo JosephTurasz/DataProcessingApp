@@ -78,6 +78,9 @@ class CreateEcommerceFile(BaseWorkflow):
         self.paf_resolution = EcommercePafResolution(self.transforms)
 
     def run(self, checked: bool = False):
+        self.service_rules._rule_maps_cache = None
+        self.transforms._return_address_cache = {}
+
         infile = self.mw.ask_open_file(
             "Choose File",
             "Files (*.csv *.txt *.f *.xls *.xlsx);;All Files (*)",
