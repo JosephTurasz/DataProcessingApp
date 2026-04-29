@@ -699,8 +699,8 @@ class _ReturnAddressesBrowserTab(_BaseBrowserTab):
     def __init__(self, *, repo: ReturnAddressesRepository, parent=None):
         super().__init__(
             repo=repo,
-            placeholder_text="Search contact/address/town/postcode...",
-            headers=["ID", "Contact Name", "Address 1", "Address 2", "Address 3", "Town", "Postcode"],
+            placeholder_text="Search contact/address/town/county/postcode...",
+            headers=["ID", "Contact Name", "Address 1", "Address 2", "Address 3", "Town", "County", "Postcode"],
             query_error_title="Query return addresses",
             stretch_last_section=True,
             export_name="Return Addresses",
@@ -724,6 +724,7 @@ class _ReturnAddressesBrowserTab(_BaseBrowserTab):
             row.get("address2", ""),
             row.get("address3", ""),
             row.get("Town", ""),
+            row.get("County", ""),
             row.get("postcode", ""),
         ]
 
@@ -736,6 +737,7 @@ class _ReturnAddressesBrowserTab(_BaseBrowserTab):
             _get_cell_text(self.table, r, 4),
             _get_cell_text(self.table, r, 5),
             _get_cell_text(self.table, r, 6),
+            _get_cell_text(self.table, r, 7),
         )
 
     def _insert_payloads(self, payloads: list):
@@ -743,7 +745,7 @@ class _ReturnAddressesBrowserTab(_BaseBrowserTab):
             cur = con.cursor()
             for row in payloads:
                 cur.execute(
-                    "INSERT INTO return_addresses (ID, contact_name, address1, address2, address3, Town, postcode) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO return_addresses (ID, contact_name, address1, address2, address3, Town, County, postcode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     row,
                 )
             con.commit()

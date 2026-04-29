@@ -18,6 +18,7 @@ from workspace.create_zip import CreateZip
 from workspace.generate_password import GeneratePassword
 from workspace.print_pdf import PrintPdf
 from workspace.create_presorted_brief import CreatePresortedBrief
+from workspace.move_items_to_folders import MoveItemsToFolders
 
 from gui.dialogs.databases_dialog import QueryDatabasesDialog
 
@@ -60,10 +61,12 @@ class MainWindow(QWidget):
         self.generate_password = GeneratePassword(self)
         self.print_pdf = PrintPdf(self)
         self.create_presorted_brief = CreatePresortedBrief(self)
+        self.move_items_to_folders = MoveItemsToFolders(self)
         # ---- Actions (buttons + wiring) ----
         actions = [
             ("btn_query_databases", "Databases", lambda: QueryDatabasesDialog(self).exec()),
             ("btn_format_csv", "Edit CSV Format", self.format_csv.run),
+            ("btn_move_items_to_folders", "Move items to folders", self.move_items_to_folders.run),
             ("btn_create_presorted_brief", "Create Pre-sorted Brief", self.create_presorted_brief.run),
             ("btn_create_file", "Create Mailing File", self.create_file.run),
             ("btn_split_file", "Split Mailing File", self.split_file.run),

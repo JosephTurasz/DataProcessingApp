@@ -96,7 +96,7 @@ class EcommerceMapping:
 
         service_block = ["Service","Weight","Length","Width","Height","Country Code","Quantity","Product Description","Retail Value",]
 
-        return_address_block = ["Return Contact Name","Return Address 1","Return Address 2","Return Address 3","Return Town","Return Postcode",]
+        return_address_block = ["Return Contact Name","Return Address 1","Return Address 2","Return Address 3","Return Town","Return County","Return Postcode",]
 
         for col in leading_fixed:
             add(col)

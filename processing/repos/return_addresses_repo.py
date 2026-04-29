@@ -13,7 +13,7 @@ class ReturnAddressesRepository(BaseRepository):
 
     def list_all(self, limit: int = 5000) -> List[Dict[str, Any]]:
         with self._connect() as con:
-            rows = con.execute(f"SELECT ID, contact_name, address1, address2, address3, Town, postcode FROM {self.table_name} ORDER BY ID ASC LIMIT ?",
+            rows = con.execute(f"SELECT ID, contact_name, address1, address2, address3, Town, County, postcode FROM {self.table_name} ORDER BY ID ASC LIMIT ?",
                 (int(limit),),).fetchall()
         return [dict(r) for r in rows]
 
@@ -24,18 +24,18 @@ class ReturnAddressesRepository(BaseRepository):
 
         pat = f"%{q}%"
         with self._connect() as con:
-            rows = con.execute(f"""SELECT ID, contact_name, address1, address2, address3, Town, postcode FROM {self.table_name} WHERE
-                               contact_name LIKE ? OR address1 LIKE ? OR address2 LIKE ? OR address3 LIKE ? OR Town LIKE ? OR postcode LIKE ?
+            rows = con.execute(f"""SELECT ID, contact_name, address1, address2, address3, Town, County, postcode FROM {self.table_name} WHERE
+                               contact_name LIKE ? OR address1 LIKE ? OR address2 LIKE ? OR address3 LIKE ? OR Town LIKE ? OR County LIKE ? OR postcode LIKE ?
                                ORDER BY ID ASC
-                               LIMIT ?""",(pat, pat, pat, pat, pat, pat, int(limit),),).fetchall()
+                               LIMIT ?""",(pat, pat, pat, pat, pat, pat, pat, int(limit),),).fetchall()
         return [dict(r) for r in rows]
 
-    def insert_row(self,*,id_: int,contact_name: str,address1: str,address2: str = "",address3: str = "",town: str,postcode: str,) -> None:
+    def insert_row(self,*,id_: int,contact_name: str,address1: str,address2: str = "",address3: str = "",town: str,county: str = "",postcode: str,) -> None:
         with self._connect() as con:
-            con.execute(f"""INSERT INTO {self.table_name} (ID, contact_name, address1, address2, address3, Town, postcode)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            con.execute(f"""INSERT INTO {self.table_name} (ID, contact_name, address1, address2, address3, Town, County, postcode)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                         (int(id_),str(contact_name),str(address1),str(address2) if address2 is not None else "",
-                         str(address3) if address3 is not None else "",str(town),str(postcode)))
+                         str(address3) if address3 is not None else "",str(town),str(county) if county is not None else "",str(postcode)))
             con.commit()
     
     def list_options(repo: ReturnAddressesRepository) -> list[tuple[str, str]]:

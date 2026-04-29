@@ -253,6 +253,7 @@ class EcommerceTransforms:
             "Return Address 2":    coerce_str(row.get("address2")),
             "Return Address 3":    coerce_str(row.get("address3")),
             "Return Town":         coerce_str(row.get("Town")),
+            "Return County":       coerce_str(row.get("County")),
             "Return Postcode":     coerce_str(row.get("postcode")),
         }
 
