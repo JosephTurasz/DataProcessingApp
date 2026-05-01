@@ -88,7 +88,7 @@ PREVIEW_HEIGHT = 750
 PREVIEW_UNDO_LIMIT = 50
 # Main window sizing
 MAIN_WINDOW_MIN_WIDTH = 760
-MAIN_WINDOW_MIN_HEIGHT = 560
+MAIN_WINDOW_MIN_HEIGHT = 580
 # =========================
 # WORKFLOW GUARDRAILS
 # =========================

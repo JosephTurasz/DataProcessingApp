@@ -43,6 +43,17 @@ class MailsortServicesRepository(BaseRepository):
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_by_service_name(self, service_name: str) -> Dict[str, Any] | None:
+        with self._connect() as con:
+            row = con.execute(
+                f"""SELECT format, sortation, machinability, mail_category
+                    FROM {self.table_name}
+                    WHERE UPPER(TRIM(service_name)) = UPPER(TRIM(?))
+                    LIMIT 1""",
+                (service_name,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def get_by_codes(
         self, *, format_code: str, sortation_code: str, machinability_code: str
     ) -> Dict[str, Any] | None:

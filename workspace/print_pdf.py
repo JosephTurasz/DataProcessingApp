@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PySide6.QtWidgets import QDialog, QMessageBox
 
@@ -27,6 +28,7 @@ class PrintPdf:
         print_opts = dlg_opts.get_results() or {}
 
         printed_dir = os.path.join(os.path.dirname(pdfs[0]), "Printed")
+        error_dir = os.path.join(os.path.dirname(pdfs[0]), "Error")
 
         dlg = BatchPdfPrintDialog(pdfs, parent=self.mw)
 
@@ -47,18 +49,19 @@ class PrintPdf:
             enabled_label = bool(print_opts.get("print_filename_label", True))
 
             def job_print(progress):
-                for idx, pdf in enumerate(batch_files[:total], start=1):
+                def print_one(idx: int, pdf: str) -> str | None:
                     printer = SYSTEM_PRINTERS[idx - 1]
-                    name = os.path.basename(pdf)
-
-                    progress(idx - 1, total, f"Printing {idx}/{total}: {name} → {printer}")
-
                     final_pdf = append_label(pdf, enabled_label)
-                    moved_to = None
-
                     try:
                         print_to_specific_printer(final_pdf, printer)
-                        moved_to = move_pdf_to_folder(pdf, printed_dir)
+                        move_pdf_to_folder(pdf, printed_dir)
+                        return None
+                    except Exception as exc:
+                        try:
+                            move_pdf_to_folder(pdf, error_dir)
+                        except Exception:
+                            pass
+                        return f"{os.path.basename(pdf)} → {printer}: {exc}"
                     finally:
                         if final_pdf and final_pdf != pdf:
                             try:
@@ -66,19 +69,30 @@ class PrintPdf:
                             except Exception:
                                 pass
 
-                    if moved_to:
-                        progress(
-                            idx,
-                            total,
-                            f"Sent {idx}/{total}: {name} → {printer} | moved to {os.path.basename(moved_to)}",
-                        )
-                    else:
-                        progress(idx, total, f"Sent {idx}/{total}: {name} → {printer}")
+                progress(0, 0, f"Spooling {total} print job(s)…")
 
-                return True
+                job_errors: list[str] = []
+                with ThreadPoolExecutor(max_workers=total) as pool:
+                    futures = [
+                        pool.submit(print_one, idx, pdf)
+                        for idx, pdf in enumerate(batch_files[:total], start=1)
+                    ]
+                    for fut in as_completed(futures):
+                        err = fut.result()
+                        if err:
+                            job_errors.append(err)
 
-            def on_done(_res):
+                return job_errors
+
+            def on_done(job_errors: list[str]):
                 dlg.set_controls_enabled(True)
+                if job_errors:
+                    err_list = "\n".join(f"  • {e}" for e in job_errors)
+                    QMessageBox.warning(
+                        dlg,
+                        "Print Errors",
+                        f"The following job(s) failed and were moved to the Error folder:\n\n{err_list}",
+                    )
                 dlg.advance_batch()
                 if dlg.is_finished():
                     dlg.accept()
@@ -89,12 +103,11 @@ class PrintPdf:
 
             self.mw._run_busy(
                 "Printing PDFs",
-                f"Sending 0/{total}…",
+                f"Spooling {total} print job(s)…",
                 job_print,
                 on_done=on_done,
                 on_err=on_err,
                 cancelable=False,
-                progress_total=total,
             )
 
         dlg.skip_requested.connect(do_skip)

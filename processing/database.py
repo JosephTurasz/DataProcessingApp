@@ -2,25 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 import sqlite3
-import sys
+
+DB_ROOT = Path(r"Q:\data\Databases")
 
 
 def resolve_config_db(rel_name: str) -> str:
-    rel_path = Path("config") / "databases" / rel_name
-
-    search_roots: list[Path] = []
-
-    bundle = getattr(sys, "_MEIPASS", None)
-    if bundle:
-        search_roots.append(Path(bundle))
-    search_roots.append(Path(__file__).resolve().parent.parent)
-    search_roots.append(Path.cwd())
-
-    for root in search_roots:
-        candidate = root / rel_path
-        if candidate.exists():
-            return str(candidate)
-    return str(search_roots[1] / rel_path)
+    return str(DB_ROOT / rel_name)
 
 
 def connect_sqlite(db_path: str, *, row_factory: bool = True) -> sqlite3.Connection:

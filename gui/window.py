@@ -3,7 +3,7 @@ import stat
 
 from config.constants import APP_TITLE, CANCELLED_MSG, MAIN_WINDOW_MIN_HEIGHT, MAIN_WINDOW_MIN_WIDTH
 
-from PySide6.QtWidgets import (QWidget,QVBoxLayout,QPushButton,QMessageBox,QLabel,QFileDialog,QGroupBox,QTextEdit)
+from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QMessageBox,QLabel,QFileDialog,QGroupBox,QTextEdit)
 from PySide6.QtCore import Qt, Signal
 
 from workspace.services import build_services
@@ -14,6 +14,7 @@ from workspace.create_file import CreateFile
 from workspace.split_file import SplitFile
 from workspace.create_ecommerce_file import CreateEcommerceFile
 from workspace.update_out_file import UpdateOutFile
+from workspace.job_validation import JobValidation
 from workspace.create_zip import CreateZip
 from workspace.generate_password import GeneratePassword
 from workspace.print_pdf import PrintPdf
@@ -41,11 +42,16 @@ class MainWindow(QWidget):
         layout.addWidget(header)
 
         group = QGroupBox("Processing Actions")
-        group_layout = QVBoxLayout(group)
+        group_layout = QHBoxLayout(group)
+        left_layout = QVBoxLayout()
+        right_layout = QVBoxLayout()
+        group_layout.addLayout(left_layout)
+        group_layout.addLayout(right_layout)
         layout.addWidget(group)
         # ---- Log ----
         self.log = QTextEdit()
         self.log.setReadOnly(True)
+        self.log.setMinimumHeight(180)
         layout.addWidget(self.log, 1)
         self.log_signal.connect(self.log.append)
         # ---- Services + Jobs ----
@@ -57,33 +63,40 @@ class MainWindow(QWidget):
         self.split_file = SplitFile(self)
         self.create_ecommerce_file = CreateEcommerceFile(self)
         self.update_out_file = UpdateOutFile(self)
+        self.job_validation = JobValidation(self)
         self.create_zip = CreateZip(self)
         self.generate_password = GeneratePassword(self)
         self.print_pdf = PrintPdf(self)
         self.create_presorted_brief = CreatePresortedBrief(self)
         self.move_items_to_folders = MoveItemsToFolders(self)
         # ---- Actions (buttons + wiring) ----
-        actions = [
-            ("btn_query_databases", "Databases", lambda: QueryDatabasesDialog(self).exec()),
-            ("btn_format_csv", "Edit CSV Format", self.format_csv.run),
-            ("btn_move_items_to_folders", "Move items to folders", self.move_items_to_folders.run),
-            ("btn_create_presorted_brief", "Create Pre-sorted Brief", self.create_presorted_brief.run),
-            ("btn_create_file", "Create Mailing File", self.create_file.run),
-            ("btn_split_file", "Split Mailing File", self.split_file.run),
-            ("btn_create_ecommerce_file", "Create E-Commerce File", self.create_ecommerce_file.run),
-            ("btn_update_out_file", "Update .OUT file", self.update_out_file.run),
-            ("btn_create_zip", "Create ZIP", self.create_zip.run),
-            ("btn_generate_random_password", "Generate Random Password", self.generate_password.run),
-            ("btn_print_pdf", "Print PDF", self.print_pdf.run)]
+        left_actions = [
+            ("btn_query_databases",          "Databases",              lambda: QueryDatabasesDialog(self).exec()),
+            ("btn_format_csv",               "Edit CSV Format",        self.format_csv.run),
+            ("btn_move_items_to_folders",    "Move Items To Folders",  self.move_items_to_folders.run),
+            ("btn_create_presorted_brief",   "Create Pre-sorted Brief",self.create_presorted_brief.run),
+            ("btn_generate_random_password", "Generate Random Password",self.generate_password.run),
+            ("btn_print_pdf",                "Print PDF",              self.print_pdf.run),
+        ]
+        right_actions = [
+            ("btn_create_file",          "Create Mailing File",    self.create_file.run),
+            ("btn_split_file",           "Split Mailing File",     self.split_file.run),
+            ("btn_create_ecommerce_file","Create E-Commerce File", self.create_ecommerce_file.run),
+            ("btn_update_out_file",      "Update .OUT File",       self.update_out_file.run),
+            ("btn_job_validation",       "Job Validation",         self.job_validation.run),
+            ("btn_create_zip",           "Create ZIP",             self.create_zip.run),
+        ]
 
         self._action_buttons: list[QPushButton] = []
-        for attr, text, slot in actions:
-            btn = QPushButton(text)
-            btn.setMinimumHeight(40)
-            btn.clicked.connect(slot)
-            setattr(self, attr, btn)
-            group_layout.addWidget(btn)
-            self._action_buttons.append(btn)
+        for col_layout, actions in ((left_layout, left_actions), (right_layout, right_actions)):
+            for attr, text, slot in actions:
+                btn = QPushButton(text)
+                btn.setMinimumHeight(40)
+                btn.clicked.connect(slot)
+                setattr(self, attr, btn)
+                col_layout.addWidget(btn)
+                self._action_buttons.append(btn)
+            col_layout.addStretch()
 
         self.last_input_dir = os.getcwd()
     # ---------------- UI helpers ----------------

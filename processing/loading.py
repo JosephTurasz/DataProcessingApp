@@ -5,14 +5,17 @@ import xml.etree.ElementTree as ET
 from utils.value_utils import is_blank
 
 
+def _xml_find(path: str, tag: str):
+    """Return the first child element matching tag from the root of an XML file."""
+    return ET.parse(path).getroot().find(tag)
+
+
 def load_gemma(path: str) -> dict:
     """Parse a .gemma XML file and return the <header> fields as a flat dict."""
-    tree = ET.parse(path)
-    root = tree.getroot()
-    header = root.find("header")
-    if header is None:
+    el = _xml_find(path, "header")
+    if el is None:
         return {}
-    return {child.tag: (child.text or "").strip() for child in header}
+    return {child.tag: (child.text or "").strip() for child in el}
 
 
 def load_bag(path: str) -> tuple[dict, pd.DataFrame]:
@@ -24,16 +27,18 @@ def load_bag(path: str) -> tuple[dict, pd.DataFrame]:
     """
     options: dict[str, str] = {}
     csv_lines: list[str] = []
+    seen_options = False
 
     with open(path, encoding="utf-8-sig", errors="replace", newline="") as f:
         for line in f:
             stripped = line.rstrip("\r\n")
-            if not csv_lines and stripped.startswith("ImportOption:"):
+            if stripped.startswith("ImportOption:"):
+                seen_options = True
                 rest = stripped[len("ImportOption:"):].strip()
                 if "=" in rest:
                     key, _, value = rest.partition("=")
                     options[key.strip()] = value.strip()
-            elif stripped.strip():
+            elif seen_options and stripped.strip():
                 csv_lines.append(stripped)
 
     if csv_lines:
@@ -43,6 +48,40 @@ def load_bag(path: str) -> tuple[dict, pd.DataFrame]:
         df = pd.DataFrame()
 
     return options, df
+
+
+def load_labels(path: str) -> dict[str, str]:
+    """Parse a .LABELS.txt XML file and return PrintRequest attributes as a dict."""
+    el = _xml_find(path, "PrintRequest")
+    return dict(el.attrib) if el is not None else {}
+
+
+def load_cpr(path: str) -> dict[str, str]:
+    """Parse the header section of a .CPR.txt file.
+
+    Reads key: value lines until the first +++ divider and returns them as a dict.
+    Lines without a colon are split on the first run of 2+ spaces.
+    """
+    fields: dict[str, str] = {}
+    with open(path, encoding="utf-8-sig", errors="replace", newline="") as f:
+        for line in f:
+            stripped = line.rstrip("\r\n")
+            if stripped.startswith("+"):
+                break
+            if ":" in stripped:
+                key, _, value = stripped.partition(":")
+            else:
+                m = re.search(r" {2,}", stripped)
+                if not m:
+                    continue
+                key = stripped[:m.start()]
+                value = stripped[m.end():]
+            key = key.strip()
+            value = value.strip()
+            if key:
+                fields[key] = value
+    return fields
+
 
 from openpyxl import load_workbook
 from utils.table_utils import pad_rows, make_unique_columns
