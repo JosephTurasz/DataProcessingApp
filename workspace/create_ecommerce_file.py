@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import pandas as pd
@@ -90,6 +91,25 @@ class CreateEcommerceFile(BaseWorkflow):
 
         def on_loaded(df: pd.DataFrame, has_header: bool):
             if df is None or df.empty:
+                self.warn("Create E-Commerce File", "File contains no data.")
+                return
+
+            # If the loader consumed the bad first row as a header, most column names
+            # will be generated "ColumnN" placeholders (≤1 real name). Detect this
+            # and promote the first data row to headers instead.
+            _generated = re.compile(r"^Column(\s\(\d+\))?$")
+            if has_header and len(df) > 0:
+                generated = sum(1 for c in df.columns if _generated.match(str(c)))
+                if generated >= len(df.columns) - 1:
+                    df.columns = df.iloc[0].astype(str).where(df.iloc[0].notna(), "").tolist()
+                    df = df.iloc[1:].reset_index(drop=True)
+                    self.info("[ECOM] Dropped Title Row.", "yellow")
+            elif not has_header and len(df) > 0:
+                if df.iloc[0].astype(str).str.strip().ne("").sum() <= 1:
+                    df = df.iloc[1:].reset_index(drop=True)
+                    self.info("[ECOM] Dropped Title Row.", "yellow")
+
+            if df.empty:
                 self.warn("Create E-Commerce File", "File contains no data.")
                 return
 
@@ -580,6 +600,9 @@ class CreateEcommerceFile(BaseWorkflow):
 
         if use_windsor_agreement_defaults:
             out = self.service_rules.apply_default_windsor_details(out)
+
+        if "Retail Value" in out.columns:
+            out["Retail Value"] = self.transforms.clean_retail_value_series(out["Retail Value"])
 
         if change_service_code:
             out = self.service_rules.use_replacement_service_code(

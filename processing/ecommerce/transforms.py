@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
+
+_CURRENCY_RE = re.compile(r"[£$€¥₹,]")
 
 from config.constants import SENTINEL_SELECT
 from processing.repos.return_addresses_repo import ReturnAddressesRepository
@@ -87,6 +90,19 @@ class EcommerceTransforms:
             out[output_column] = self.normalise_weight_series(out[output_column])
 
         return out
+
+    def clean_retail_value_series(self, series: pd.Series) -> pd.Series:
+        def _clean(val):
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                return val
+            s = _CURRENCY_RE.sub("", str(val)).strip()
+            try:
+                n = abs(float(s))
+            except (ValueError, TypeError):
+                return val
+            n = max(1.0, n)
+            return int(n) if n == int(n) else n
+        return series.map(_clean)
 
     def populate_missing_town_from_county_or_address(
         self,

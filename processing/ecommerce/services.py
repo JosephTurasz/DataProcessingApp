@@ -327,6 +327,10 @@ class EcommerceServices:
         out = df.copy()
 
         for col, value in DEFAULT_WINDSOR_DETAILS.items():
-            out[col] = value
+            if col in out.columns:
+                blank_mask = out[col].isna() | out[col].astype(str).str.strip().eq("")
+                out.loc[blank_mask, col] = value
+            else:
+                out[col] = value
 
         return out
