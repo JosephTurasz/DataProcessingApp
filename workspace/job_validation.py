@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
 from processing.loading import load_bag, load_cpr, load_labels
 from workspace.base import BaseWorkflow
 
-_HEADER_SENTINELS = {"Client/Sub-Client Name", "Client to be Billed"}
 _BRIEF_TYPES = {
     "client/sub-client name": "TDG Brief v2",
     "client to be billed":    "TDG Brief v1",
@@ -259,6 +258,7 @@ class JobValidation(BaseWorkflow):
         # TDG brief — parse headers from the sentinel row
         # headers       — stripped logical names used for column matching
         # header_values — cleaned display values written to the output
+        assert header_list_idx is not None
         headers, header_values = _parse_tdg_headers(all_rows[header_list_idx])
 
         # Find and rename the job column
@@ -364,7 +364,8 @@ class JobValidation(BaseWorkflow):
     # ------------------------------------------------------------------
     # Scotts Brief parser
     # ------------------------------------------------------------------
-    def _parse_scotts_brief(self, all_rows: list) -> tuple:
+    @staticmethod
+    def _parse_scotts_brief(all_rows: list) -> tuple:
         # Header row: first row containing "Sortation File Volume".
         header_row_idx = next(
             (i for i, row in enumerate(all_rows)
@@ -529,6 +530,11 @@ class JobValidation(BaseWorkflow):
         labels_files = [f for f in validation_files if f.upper().endswith(".LABELS.TXT")]
         val_row = [None] * len(header_values)
 
+        def _set(col_name: str, value) -> None:
+            idx = _col_idx(header_values, col_name)
+            if idx is not None:
+                val_row[idx] = value
+
         if bag_files:
             try:
                 bag_opts, _ = load_bag(bag_files[0])
@@ -545,15 +551,11 @@ class JobValidation(BaseWorkflow):
 
                 total_items = cpr_data.get("Total Items Processed", "")
                 if total_items:
-                    idx = _col_idx(header_values, "No. Items")
-                    if idx is not None:
-                        val_row[idx] = _to_numeric(total_items.replace(",", ""))
+                    _set("No. Items", _to_numeric(total_items.replace(",", "")))
 
                 max_bag_weight = cpr_data.get("Maximum Bag Weight", "")
                 if max_bag_weight:
-                    idx = _col_idx(header_values, "Maximum Container Weight")
-                    if idx is not None:
-                        val_row[idx] = _to_numeric(max_bag_weight.replace(",", ""))
+                    _set("Maximum Container Weight", _to_numeric(max_bag_weight.replace(",", "")))
 
                 service_name = cpr_data.get("Service Selected", "")
                 if service_name:
@@ -579,9 +581,7 @@ class JobValidation(BaseWorkflow):
                 labels_data = load_labels(labels_files[0])
                 poster = labels_data.get("Poster", "")
                 if poster:
-                    idx = _col_idx(header_values, "Poster")
-                    if idx is not None:
-                        val_row[idx] = poster
+                    _set("Poster", poster)
             except Exception as e:
                 self.info(f"[LABELS] Could not read LABELS file: {e}", "yellow")
 
