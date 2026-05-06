@@ -21,11 +21,9 @@ _BRIEF_TYPES = {
 # Rename rules applied to header_values at the end of processing.
 # Each entry is (substring_to_match, output_name); first match wins.
 _HEADER_RENAME_RULES = [
-    ("Client",           "Client"),
-    ("Machineable",      "Machinability"),
-    ("Container Fill",   "Container Fill"),
-    ("Weight of Pack",   "Accurate Weight"),
-    ("Number of Items",  "No. Items"),
+    ("Machineable",        "Machinability"),
+    ("Weight of Pack",     "Item Weight"),
+    ("Number of Items",    "No. Items"),
     ("Date of Collection", "Collection Date"),
 ]
 _JOB_HEADER_VARIANTS = {"Job Reference", "Job Name/Reference"}
@@ -319,23 +317,30 @@ class JobValidation(BaseWorkflow):
 
         # TDG Brief v2: Container Fill column is already present in the brief.
 
-        # Insert "Maximum Container Weight" (Max Container Fill × Pack Weight) after pack weight
+        # Insert "Maximum Container Weight" (Container Fill × Pack Weight) — always present
+        # so the CPR value can always be written to it.
         pack_w_idx = next(
-            (i for i, hv in enumerate(header_values) if "Weight of Pack" in str(hv or "")), None
+            (i for i, hv in enumerate(header_values)
+             if "Weight of Pack" in str(hv or "") or "Item Weight" in str(hv or "")), None
         )
         fill_idx = next(
             (i for i, hv in enumerate(header_values) if "Container Fill" in str(hv or "")), None
         )
-        if pack_w_idx is not None and fill_idx is not None:
+        if pack_w_idx is not None:
             twc_at = pack_w_idx + 1
-            headers.insert(twc_at, "Maximum Container Weight")
-            header_values.insert(twc_at, "Maximum Container Weight")
-            if job_col_idx >= twc_at:
-                job_col_idx += 1
-            if fill_idx >= twc_at:
-                fill_idx += 1
-            for row_data in rows_data:
-                row_data.insert(twc_at, None)
+        elif fill_idx is not None:
+            twc_at = fill_idx + 1
+        else:
+            twc_at = len(headers)
+        headers.insert(twc_at, "Maximum Container Weight")
+        header_values.insert(twc_at, "Maximum Container Weight")
+        if job_col_idx >= twc_at:
+            job_col_idx += 1
+        if fill_idx is not None and fill_idx >= twc_at:
+            fill_idx += 1
+        for row_data in rows_data:
+            row_data.insert(twc_at, None)
+            if pack_w_idx is not None and fill_idx is not None:
                 pack_w = _to_numeric(row_data[pack_w_idx])
                 fill = _to_numeric(row_data[fill_idx])
                 if pack_w is not None and fill is not None:
@@ -430,7 +435,7 @@ class JobValidation(BaseWorkflow):
 
         scotts_headers = [
             "Poster", "Job Name", "Service", "Format",
-            "Container Fill", "Accurate Weight", "No. Items", "Collection Date",
+            "Container Fill", "Accurate Weight", "Maximum Container Weight", "No. Items", "Collection Date",
         ]
 
         def _cell(row, col):
@@ -448,13 +453,21 @@ class JobValidation(BaseWorkflow):
             machine = _cell(row, machine_col)
             service_out = f"{machine} / {service}" if machine and service else service
 
+            tray_fill = _to_numeric(_cell(row, tray_col))
+            item_weight = _to_numeric(_cell(row, weight_col))
+            max_container_weight = (
+                tray_fill * item_weight
+                if tray_fill is not None and item_weight is not None
+                else None
+            )
             rows_data.append([
                 mh_by_row[row_i],
                 _cell(row, job_ref_col),
                 service_out,
                 _cell(row, format_col),
-                _to_numeric(_cell(row, tray_col)),
-                _to_numeric(_cell(row, weight_col)),
+                tray_fill,
+                item_weight,
+                max_container_weight,
                 _to_numeric(_cell(row, sortation_col)),
                 _cell(row, collect_col),
             ])
