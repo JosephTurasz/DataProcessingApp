@@ -1,0 +1,14 @@
+PDF_LABEL_WIDTH_PT  = 288
+PDF_LABEL_HEIGHT_PT = 432
+PDF_LABEL_FONT      = "helv"
+PDF_LABEL_FONT_SIZE = 24
+PDF_LABEL_ROTATE    = 90
+
+SYSTEM_PRINTERS = [
+    r"\\TDG-FP01\DPWarLabel01",
+    r"\\TDG-FP01\DPWarLabel02",
+    r"\\TDG-FP01\DPWarLabel03",
+    r"\\TDG-FP01\DPWarLabel04",
+    r"\\TDG-FP01\DPWarLabel05",
+    r"\\TDG-FP01\DPWarLabel06",
+]

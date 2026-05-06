@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import re
 from datetime import date, datetime
+from difflib import SequenceMatcher
+from functools import lru_cache
 
 import openpyxl
 from openpyxl.styles import Alignment, Font
@@ -10,38 +12,15 @@ from PySide6.QtWidgets import (
     QDialog, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
+from config.constants.job_validation import (
+    BAG_FIELD_MAP, BRACKET_RE, BRIEF_TYPES, CLIENT_HEADER_VARIANTS,
+    DATE_PARSE_FMTS, DIGITS_RE, GREEN_FILL, GROUP_COL_NAMES,
+    HEADER_RENAME_RULES, JOB_HEADER_VARIANTS, MAX_IN_CONTAINER_RE,
+    NUMERIC_COLS, NUMERIC_RE, ORANGE_FILL, POSTCOM_RE, RED_FILL,
+    SERVICE_SECTIONS, SPACE_RUN_RE, TRAY_FILL_RE, WORD_RE,
+)
 from processing.loading import load_bag, load_cpr, load_labels
 from workspace.base import BaseWorkflow
-
-_BRIEF_TYPES = {
-    "client/sub-client name": "TDG Brief v2",
-    "client to be billed":    "TDG Brief v1",
-}
-
-# Rename rules applied to header_values at the end of processing.
-# Each entry is (substring_to_match, output_name); first match wins.
-_HEADER_RENAME_RULES = [
-    ("Machineable",        "Machinability"),
-    ("Weight of Pack",     "Item Weight"),
-    ("Number of Items",    "No. Items"),
-    ("Date of Collection", "Collection Date"),
-]
-_JOB_HEADER_VARIANTS = {"Job Reference", "Job Name/Reference"}
-
-# Maps output header display names → ImportOption keys in a .BAG.txt file
-_BAG_FIELD_MAP = {
-    "Client":          "Client",
-    "Job Name":        "JobDesc",
-    "Collection Date": "CollectionDate",
-    "Accurate Weight": "ItemWeight",
-    "Item Weight":     "ItemWeight",
-    "Container":       "ContainerType",
-}
-
-# Runs of 5+ spaces are truncated from that point onward.
-_SPACE_RUN_RE = re.compile(r" {5,}")
-# Bracket content including the brackets themselves (round and square).
-_BRACKET_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]")
 
 
 def _normalize_cell(val):
@@ -49,26 +28,115 @@ def _normalize_cell(val):
         return val.strftime("%d/%m/%Y")
     if not isinstance(val, str):
         return val
-    m = _SPACE_RUN_RE.search(val)
+    m = SPACE_RUN_RE.search(val)
     return val[:m.start()] if m else val
 
 
 def _clean_header(val):
     if not isinstance(val, str):
         return val
-    return _BRACKET_RE.sub("", val).strip()
+    return BRACKET_RE.sub("", val).strip()
 
 
-_NUMERIC_RE = re.compile(r"\d+(?:\.\d+)?")
-_TRAY_FILL_RE = re.compile(r"\btray\s+fill\b", re.IGNORECASE)
-_DIGITS_RE = re.compile(r"\d+")
+def _normalise_date(val) -> str | None:
+    """Return val as DD/MM/YYYY string, trying common formats. Returns None if blank."""
+    if isinstance(val, (datetime, date)):
+        return val.strftime("%d/%m/%Y")
+    s = str(val or "").strip()
+    if not s:
+        return None
+    for fmt in DATE_PARSE_FMTS:
+        try:
+            return datetime.strptime(s, fmt).strftime("%d/%m/%Y")
+        except ValueError:
+            continue
+    return s
+
+
+def _word_fuzzy_match(w1: str, w2: str) -> bool:
+    """True if two words are considered equivalent.
+
+    Handles plurals/truncations via prefix ('tray'/'trays').
+    """
+    if w1 == w2:
+        return True
+    short, long_ = (w1, w2) if len(w1) <= len(w2) else (w2, w1)
+    return long_.startswith(short)
+
+
+def _words_match(a: str, b: str) -> bool:
+    """True if every word in the shorter string fuzzy-matches a word in the longer.
+
+    Handles truncated names ('Cashmere - T' / 'Cashmere Centre - T'),
+    plurals ('Tray' / 'Trays'), and abbreviations ('Bk' / 'Book').
+    """
+    wa = WORD_RE.findall(a.lower())
+    wb = WORD_RE.findall(b.lower())
+    if not wa or not wb:
+        return False
+    shorter, longer = (wa, wb) if len(wa) <= len(wb) else (wb, wa)
+    return all(any(_word_fuzzy_match(sw, lw) for lw in longer) for sw in shorter)
+
+
+# ---- Service-group validation -----------------------------------------------
+
+@lru_cache(maxsize=256)
+def _kw_pattern(keyword: str) -> re.Pattern:
+    return re.compile(r"\b" + re.escape(keyword) + r"\b", re.IGNORECASE)
+
+
+def _kw_in(text: str, keyword: str) -> bool:
+    return bool(_kw_pattern(keyword).search(text))
+
+
+# Pre-compute per-section: sorted (kw, data_kw) pairs (longest first) + unique data kws
+_COMPILED_SECTIONS: list[tuple[str, list[tuple[str, str]], bool, bool, frozenset[str]]] = [
+    (name, sorted(kw_map.items(), key=lambda x: len(x[0]), reverse=True),
+     must_match, symmetric, frozenset(kw_map.values()))
+    for name, kw_map, must_match, symmetric in SERVICE_SECTIONS
+]
+
+
+def _validate_service_group(brief_text: str, data_text: str) -> list[str]:
+    """Return a list of failed section names (empty = all passed)."""
+    failed = []
+    for section_name, sorted_kws, must_match, symmetric, data_kws in _COMPILED_SECTIONS:
+        matched_data_kw = None
+        for kw, data_kw in sorted_kws:
+            if _kw_in(brief_text, kw):
+                matched_data_kw = data_kw
+                break
+
+        if matched_data_kw is None:
+            if must_match:
+                failed.append(section_name)
+            elif symmetric and any(_kw_in(data_text, dk) for dk in data_kws):
+                failed.append(section_name)
+            continue
+
+        if not _kw_in(data_text, matched_data_kw):
+            failed.append(section_name)
+
+    return failed
+
+
+# -----------------------------------------------------------------------------
+
+def _apply_po_prefix(all_rows: list, rows_data: list, job_col_idx: int) -> None:
+    """If a 'PO TO ADD TO DOCKETHUB' cell exists, prepend its value to each job name."""
+    po_value = _find_right_of(all_rows, "po to add to dockethub")
+    if not po_value or not str(po_value).strip():
+        return
+    for row_data in rows_data:
+        current = str(row_data[job_col_idx] or "").strip()
+        row_data[job_col_idx] = f"{po_value} {current}".strip() if current else po_value
 
 
 def _to_numeric(val):
     """Extract the first number from val. Returns int if whole, float otherwise, or None."""
     if isinstance(val, (int, float)):
         return val
-    m = _NUMERIC_RE.search(str(val or ""))
+    m = NUMERIC_RE.search(str(val or ""))
     if not m:
         return None
     n = float(m.group())
@@ -80,8 +148,8 @@ def _extract_container_fill(val):
     if not isinstance(val, str):
         return val
     for line in val.splitlines():
-        if _TRAY_FILL_RE.search(line):
-            m = _DIGITS_RE.search(line)
+        if TRAY_FILL_RE.search(line):
+            m = DIGITS_RE.search(line)
             if m:
                 return int(m.group())
     return val
@@ -120,7 +188,7 @@ def _detect_brief_type(all_rows: list) -> tuple[str | None, int | None]:
     """
     for i, row in enumerate(all_rows):
         col_a = str(row[0] or "").strip()
-        if bt := _BRIEF_TYPES.get(col_a.lower()):
+        if bt := BRIEF_TYPES.get(col_a.lower()):
             return bt, i
         for cell_val in row:
             s = str(cell_val or "").strip()
@@ -205,7 +273,9 @@ class JobValidation(BaseWorkflow):
             raise ValueError("Could not identify brief type. Is this a TDG, Pureprint, or Scotts brief?")
 
         if brief_type == "Scotts Brief":
-            return self._parse_scotts_brief(all_rows)
+            hv, rd, ji, bt = self._parse_scotts_brief(all_rows)
+            _apply_po_prefix(all_rows, rd, ji)
+            return hv, rd, ji, bt
 
         if brief_type == "Pureprint Brief":
             def _r(label, *, partial=False):
@@ -251,7 +321,9 @@ class JobValidation(BaseWorkflow):
                 _r("Collection Date:"),
                 _r("JIC Opt in or Opt out:"),
             ]
-            return pp_headers, [pp_row], pp_headers.index("Job Name"), brief_type
+            pp_rows = [pp_row]
+            _apply_po_prefix(all_rows, pp_rows, pp_headers.index("Job Name"))
+            return pp_headers, pp_rows, pp_headers.index("Job Name"), brief_type
 
         # TDG brief — parse headers from the sentinel row
         # headers       — stripped logical names used for column matching
@@ -259,17 +331,19 @@ class JobValidation(BaseWorkflow):
         assert header_list_idx is not None
         headers, header_values = _parse_tdg_headers(all_rows[header_list_idx])
 
-        # Find and rename the job column
+        # Find and rename the job and client columns
         job_col_idx: int | None = None
         for i, h in enumerate(headers):
-            if h in _JOB_HEADER_VARIANTS:
+            if h in JOB_HEADER_VARIANTS:
                 headers[i] = "Job Name"
                 header_values[i] = "Job Name"
                 job_col_idx = i
-                break
+            elif h.lower() in CLIENT_HEADER_VARIANTS:
+                headers[i] = "Client"
+                header_values[i] = "Client"
 
         if job_col_idx is None:
-            variants = " or ".join(f'"{v}"' for v in sorted(_JOB_HEADER_VARIANTS))
+            variants = " or ".join(f'"{v}"' for v in sorted(JOB_HEADER_VARIANTS))
             raise ValueError(f"Could not find {variants} in the header row.")
 
         # Collect data rows — stop at first blank in the job column
@@ -284,8 +358,9 @@ class JobValidation(BaseWorkflow):
             ]
             rows_data.append(row_data)
 
-        # TDG Brief v1: Container Fill is absent — insert it and populate from
-        # the cell below "Additional Information" elsewhere in the sheet.
+        # TDG Brief v1: Container Fill is absent — insert it and populate.
+        # First check if the Container cell contains "Max <n>" (e.g. "Trays (Max 75)");
+        # if not, fall back to the cell below "Additional Information".
         if brief_type == "TDG Brief v1":
             container_idx = next(
                 (i for i, hv in enumerate(header_values) if str(hv or "").strip() == "Container"), None
@@ -299,21 +374,28 @@ class JobValidation(BaseWorkflow):
                 if job_col_idx >= insert_at:
                     job_col_idx += 1
 
-                max_fill_value = None
-                found = False
-                for row_idx, row in enumerate(all_rows):
-                    for ci, cell_val in enumerate(row):
-                        if str(cell_val or "").strip().lower() == "additional information":
-                            next_row = all_rows[row_idx + 1] if row_idx + 1 < len(all_rows) else []
-                            raw = next_row[ci] if ci < len(next_row) else None
-                            max_fill_value = _extract_container_fill(_normalize_cell(raw))
-                            found = True
+                for row_data in rows_data:
+                    container_val = str(row_data[container_idx] or "")
+                    m = MAX_IN_CONTAINER_RE.search(container_val)
+                    if m:
+                        row_data[insert_at] = int(m.group(1))
+
+                if all(row_data[insert_at] is None for row_data in rows_data):
+                    max_fill_value = None
+                    found = False
+                    for row_idx, row in enumerate(all_rows):
+                        for ci, cell_val in enumerate(row):
+                            if str(cell_val or "").strip().lower() == "additional information":
+                                next_row = all_rows[row_idx + 1] if row_idx + 1 < len(all_rows) else []
+                                raw = next_row[ci] if ci < len(next_row) else None
+                                max_fill_value = _extract_container_fill(_normalize_cell(raw))
+                                found = True
+                                break
+                        if found:
                             break
-                    if found:
-                        break
-                if max_fill_value is not None:
-                    for row_data in rows_data:
-                        row_data[insert_at] = max_fill_value
+                    if max_fill_value is not None:
+                        for row_data in rows_data:
+                            row_data[insert_at] = max_fill_value
 
         # TDG Brief v2: Container Fill column is already present in the brief.
 
@@ -349,6 +431,10 @@ class JobValidation(BaseWorkflow):
         # Insert "Poster" as the first column — first non-blank cell to the right
         # of any cell containing "company name".
         poster_value = _find_right_of(all_rows, "company name", partial=True)
+        if poster_value:
+            m = POSTCOM_RE.search(str(poster_value))
+            if m:
+                poster_value = m.group(1)
 
         headers.insert(0, "Poster")
         header_values.insert(0, "Poster")
@@ -359,11 +445,12 @@ class JobValidation(BaseWorkflow):
         # Apply final display renames to header_values
         for i, hv in enumerate(header_values):
             s = str(hv or "")
-            for substr, new_name in _HEADER_RENAME_RULES:
+            for substr, new_name in HEADER_RENAME_RULES:
                 if substr in s:
                     header_values[i] = new_name
                     break
 
+        _apply_po_prefix(all_rows, rows_data, job_col_idx)
         return header_values, rows_data, job_col_idx, brief_type
 
     # ------------------------------------------------------------------
@@ -531,6 +618,12 @@ class JobValidation(BaseWorkflow):
             if _has_line_break(cell.value):
                 cell.alignment = Alignment(wrap_text=True)
 
+        for i, hv in enumerate(header_values):
+            if str(hv or "") in NUMERIC_COLS:
+                selected_row[i] = _to_numeric(selected_row[i])
+            elif str(hv or "") == "Collection Date":
+                selected_row[i] = _normalise_date(selected_row[i])
+
         out_ws.append(["Brief"] + selected_row)
         row_num = out_ws.max_row
         out_ws.cell(row=row_num, column=1).font = Font(bold=True)
@@ -548,11 +641,12 @@ class JobValidation(BaseWorkflow):
             if idx is not None:
                 val_row[idx] = value
 
+        bag_df = None
         if bag_files:
             try:
-                bag_opts, _ = load_bag(bag_files[0])
+                bag_opts, bag_df = load_bag(bag_files[0])
                 for i, hv in enumerate(header_values):
-                    opt_key = _BAG_FIELD_MAP.get(str(hv or ""))
+                    opt_key = BAG_FIELD_MAP.get(str(hv or ""))
                     if opt_key:
                         val_row[i] = bag_opts.get(opt_key)
             except Exception as e:
@@ -598,10 +692,162 @@ class JobValidation(BaseWorkflow):
             except Exception as e:
                 self.info(f"[LABELS] Could not read LABELS file: {e}", "yellow")
 
+        mcf_idx = _col_idx(header_values, "Max Container Fill")
+        iw_idx  = _col_idx(header_values, "Item Weight") or _col_idx(header_values, "Accurate Weight")
+        if mcf_idx is not None and bag_df is not None and not bag_df.empty:
+            items_col = next((c for c in bag_df.columns if str(c).strip().lower() == "items"), None)
+            if items_col is not None:
+                max_items = bag_df[items_col].map(_to_numeric).dropna().max()
+                if max_items is not None:
+                    val_row[mcf_idx] = int(max_items)
+
+        for i, hv in enumerate(header_values):
+            if str(hv or "") in NUMERIC_COLS:
+                val_row[i] = _to_numeric(val_row[i])
+            elif str(hv or "") == "Collection Date":
+                val_row[i] = _normalise_date(val_row[i])
+
         if any(v is not None for v in val_row):
             out_ws.append(["Data files"] + val_row)
             row_num = out_ws.max_row
             out_ws.cell(row=row_num, column=1).font = Font(bold=True)
+
+        # Validation row
+        validation_row   = [None] * len(header_values)
+        validation_fills = {}  # header index → PatternFill
+
+        for col_name in ("Poster", "Client", "Container"):
+            idx = _col_idx(header_values, col_name)
+            if idx is not None:
+                brief_val = str(selected_row[idx] or "").strip()
+                data_val  = str(val_row[idx] or "").strip()
+                if brief_val and _words_match(brief_val, data_val):
+                    validation_row[idx]   = "Correct"
+                    validation_fills[idx] = GREEN_FILL
+                else:
+                    validation_row[idx]   = "Wrong"
+                    validation_fills[idx] = RED_FILL
+
+        job_idx = _col_idx(header_values, "Job Name")
+        if job_idx is not None:
+            brief_val = str(selected_row[job_idx] or "").strip().lower()
+            data_val  = str(val_row[job_idx] or "").strip().lower()
+            if brief_val and data_val:
+                ratio = SequenceMatcher(None, brief_val, data_val).ratio()
+                if ratio >= 0.8:
+                    validation_row[job_idx]   = "Correct"
+                    validation_fills[job_idx] = GREEN_FILL
+                else:
+                    validation_row[job_idx]   = "Wrong"
+                    validation_fills[job_idx] = RED_FILL
+
+        mcf_val_idx = _col_idx(header_values, "Max Container Fill")
+        if mcf_val_idx is not None:
+            brief_num = _to_numeric(selected_row[mcf_val_idx])
+            data_num  = _to_numeric(val_row[mcf_val_idx])
+            if brief_num is not None and data_num is not None:
+                if data_num <= brief_num:
+                    validation_row[mcf_val_idx]   = "Correct"
+                    validation_fills[mcf_val_idx] = GREEN_FILL
+                else:
+                    validation_row[mcf_val_idx]   = "Wrong"
+                    validation_fills[mcf_val_idx] = RED_FILL
+
+        if iw_idx is not None:
+            brief_num = _to_numeric(selected_row[iw_idx])
+            data_num  = _to_numeric(val_row[iw_idx])
+            if brief_num is not None and data_num is not None:
+                if data_num == brief_num:
+                    validation_row[iw_idx]   = "Correct"
+                    validation_fills[iw_idx] = GREEN_FILL
+                else:
+                    validation_row[iw_idx]   = "Wrong"
+                    validation_fills[iw_idx] = RED_FILL
+
+        mcw_val_idx = _col_idx(header_values, "Maximum Container Weight")
+        if mcw_val_idx is not None:
+            brief_num = _to_numeric(selected_row[mcw_val_idx])
+            data_num  = _to_numeric(val_row[mcw_val_idx])
+            if brief_num is not None and data_num is not None:
+                if data_num <= brief_num:
+                    validation_row[mcw_val_idx]   = "Correct"
+                    validation_fills[mcw_val_idx] = GREEN_FILL
+                else:
+                    validation_row[mcw_val_idx]   = "Wrong"
+                    validation_fills[mcw_val_idx] = RED_FILL
+
+        sr_idx = _col_idx(header_values, "Split Release")
+        if sr_idx is not None:
+            validation_row[sr_idx]   = "Manual"
+            validation_fills[sr_idx] = ORANGE_FILL
+
+        items_idx = _col_idx(header_values, "No. Items")
+        if items_idx is not None:
+            brief_num = _to_numeric(selected_row[items_idx])
+            data_num  = _to_numeric(val_row[items_idx])
+            if brief_num is not None and data_num is not None:
+                diff = data_num - brief_num
+                if 0 <= diff <= 4:
+                    validation_row[items_idx]   = "Correct"
+                    validation_fills[items_idx] = GREEN_FILL
+                else:
+                    validation_row[items_idx]   = "Different"
+                    validation_fills[items_idx] = ORANGE_FILL
+
+        date_idx = _col_idx(header_values, "Collection Date")
+        if date_idx is not None:
+            brief_date = str(selected_row[date_idx] or "").strip()
+            data_date  = str(val_row[date_idx] or "").strip()
+            if brief_date and data_date:
+                if brief_date == data_date:
+                    validation_row[date_idx]   = "Correct"
+                    validation_fills[date_idx] = GREEN_FILL
+                else:
+                    validation_row[date_idx]   = "Wrong"
+                    validation_fills[date_idx] = RED_FILL
+
+        # Service group — scan all four cells together
+        svc_indices = [i for i in (_col_idx(header_values, c) for c in GROUP_COL_NAMES)
+                       if i is not None]
+        group_text = None
+        group_fill = None
+        if svc_indices:
+            brief_text = " ".join(str(selected_row[i] or "") for i in svc_indices)
+            data_text  = " ".join(str(val_row[i] or "") for i in svc_indices)
+            failed_sections = _validate_service_group(brief_text, data_text)
+            if not failed_sections:
+                group_text = "Correct"
+                group_fill = GREEN_FILL
+            else:
+                group_text = "Wrong: " + ", ".join(failed_sections)
+                group_fill = RED_FILL
+            validation_row[svc_indices[0]] = group_text
+            for i in svc_indices[1:]:
+                validation_row[i] = None
+            for i in svc_indices:
+                validation_fills[i] = group_fill
+
+        if any(v is not None for v in validation_row):
+            out_ws.append(["Validation"] + validation_row)
+            row_num = out_ws.max_row
+            out_ws.cell(row=row_num, column=1).font = Font(bold=True)
+            for col_idx, fill in validation_fills.items():
+                cell = out_ws.cell(row=row_num, column=col_idx + 2)
+                cell.fill = fill
+                cell.font = Font(bold=True)
+
+            if len(svc_indices) > 1:
+                min_col = min(svc_indices) + 2
+                max_col = max(svc_indices) + 2
+                out_ws.merge_cells(
+                    start_row=row_num, start_column=min_col,
+                    end_row=row_num,   end_column=max_col,
+                )
+                merged = out_ws.cell(row=row_num, column=min_col)
+                merged.value     = group_text
+                merged.fill      = group_fill
+                merged.font      = Font(bold=True)
+                merged.alignment = Alignment(horizontal="center")
 
         try:
             out_wb.save(out_path)

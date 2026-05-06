@@ -4,6 +4,7 @@ import os
 import shutil
 import tempfile
 
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QDialog
 
 from workspace.base import BaseWorkflow
@@ -110,7 +111,8 @@ class CreateZip(BaseWorkflow):
                 self.warn("Warning", res_out["pw_warning"])
 
             if res_out.get("password"):
-                self.info(f"Zip file saved successfully. Password: {res_out['password']}", "green")
+                QGuiApplication.clipboard().setText(res_out["password"])
+                self.info(f"Zip file saved successfully. Password: {res_out['password']} (copied to clipboard)", "green")
             else:
                 self.info("Zip file saved successfully.", "green")
 
