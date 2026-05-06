@@ -40,6 +40,11 @@ FIELD_LENGTH_COLUMNS = [
     "PAF County",
 ]
 
+CHANNEL_ISLANDS_NAMES: frozenset[str] = frozenset({
+    "jersey", "guernsey", "alderney", "sark", "herm",
+    "jethou", "brecqhou", "brechou", "lihou",
+})
+
 ECOMMERCE_HEADER_SYNONYMS: dict[str, list[str]] = {
     "postcode_column": ["postcode", "post code", "postal code", "zip", "zip code","mailing postcode", "mailing post code"],
     "town_column": ["town", "city", "post town", "mailing town"],

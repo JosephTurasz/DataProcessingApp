@@ -4,7 +4,7 @@ from typing import Any
 
 import pandas as pd
 
-from config.constants import MAX_SERVICE_DIMENSIONS, DEFAULT_WINDSOR_DETAILS
+from config.constants import MAX_SERVICE_DIMENSIONS, DEFAULT_WINDSOR_DETAILS, CHANNEL_ISLANDS_NAMES, PAF_TOWN_COL, PAF_COUNTY_COL
 from processing.repos.ecom_services_repo import EcomServicesRepository
 from utils.value_utils import coerce_str, is_blank, normalize_code
 
@@ -153,6 +153,21 @@ class EcommerceServices:
 
         return None
 
+    def channel_islands_utrak_reject_reason(
+        self,
+        *,
+        service_value,
+        town_value,
+        county_value,
+    ) -> str | None:
+        if self.normalise_service_code(service_value) != "UTRAK":
+            return None
+        town = coerce_str(town_value).strip().lower()
+        county = coerce_str(county_value).strip().lower()
+        if town in CHANNEL_ISLANDS_NAMES or county in CHANNEL_ISLANDS_NAMES:
+            return "UTRAK invalid for Channel Islands destination"
+        return None
+
     def valid_services_for_rows(self,rows: list[dict[str, Any]],*,all_rules: list[dict],) -> list[str]:
         valid_codes: list[str] = []
         seen: set[str] = set()
@@ -221,7 +236,14 @@ class EcommerceServices:
         out[service_column] = out[service_column].map(lambda value: self.canonicalise_service_value(value,by_new=by_new,by_old=by_old))
         return out
 
-    def collect_service_resolution_state(self,df: pd.DataFrame,*,rule_cache: dict[str, Any],) -> dict[str, Any]:
+    def collect_service_resolution_state(
+        self,
+        df: pd.DataFrame,
+        *,
+        rule_cache: dict[str, Any],
+        town_col: str = PAF_TOWN_COL,
+        county_col: str = PAF_COUNTY_COL,
+    ) -> dict[str, Any]:
         by_new = rule_cache["by_new"]
         by_old = rule_cache["by_old"]
 
@@ -230,14 +252,21 @@ class EcommerceServices:
             if col not in df.columns:
                 return {"resolution_indices": [], "rows": [], "valid_services": []}
 
-        reject_reasons = df.apply(
-            lambda row: self.service_reject_reason(
+        def combined_reject_reason(row) -> str | None:
+            svc_reason = self.service_reject_reason(
                 service_value=row.get("Service"), length_value=row.get("Length"),
                 width_value=row.get("Width"), height_value=row.get("Height"),
                 weight_value=row.get("Weight"), by_new=by_new, by_old=by_old,
-            ),
-            axis=1,
-        )
+            )
+            if svc_reason is not None:
+                return svc_reason
+            return self.channel_islands_utrak_reject_reason(
+                service_value=row.get("Service"),
+                town_value=row.get(town_col, ""),
+                county_value=row.get(county_col, ""),
+            )
+
+        reject_reasons = df.apply(combined_reject_reason, axis=1)
         reject_mask = reject_reasons.notna()
 
         resolution_indices = [int(i) for i in df.index[reject_mask]]

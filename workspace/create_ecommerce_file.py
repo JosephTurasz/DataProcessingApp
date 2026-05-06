@@ -277,7 +277,6 @@ class CreateEcommerceFile(BaseWorkflow):
                 outfile = self.ask_save_csv_default_from_infile(
                     infile,
                     title="Save E-Commerce output file",
-                    suffix=" (ecommerce).csv",
                     filter="CSV Files (*.csv);;All Files (*)",
                 )
                 if not outfile:

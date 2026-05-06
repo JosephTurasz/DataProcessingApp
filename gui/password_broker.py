@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QInputDialog, QLineEdit
 
 class PasswordBroker(QObject):
     request = Signal(str)
+    _cancel = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -12,8 +13,10 @@ class PasswordBroker(QObject):
         self._wait = QWaitCondition()
         self._response = None
         self._pending = False
+        self._dialog: QInputDialog | None = None
 
         self.request.connect(self._on_request, Qt.ConnectionType.QueuedConnection)
+        self._cancel.connect(self._on_cancel, Qt.ConnectionType.QueuedConnection)
 
     def get_password(self, prompt: str, timeout_ms: int = 60_000) -> str | None:
         self._mutex.lock()
@@ -25,15 +28,27 @@ class PasswordBroker(QObject):
             while self._pending:
                 if not self._wait.wait(self._mutex, timeout_ms):
                     self._pending = False
+                    self._cancel.emit()
                     return None
             return self._response
         finally:
             self._mutex.unlock()
 
+    @Slot()
+    def _on_cancel(self):
+        if self._dialog is not None:
+            self._dialog.reject()
+
     @Slot(str)
     def _on_request(self, prompt: str):
-        pw, ok = QInputDialog.getText(None, "Password required", prompt, QLineEdit.EchoMode.Password)
-        response = pw if ok else None
+        self._dialog = QInputDialog()
+        self._dialog.setWindowTitle("Password required")
+        self._dialog.setLabelText(prompt)
+        self._dialog.setTextEchoMode(QLineEdit.EchoMode.Password)
+
+        ok = bool(self._dialog.exec())
+        response = self._dialog.textValue() if ok else None
+        self._dialog = None
 
         self._mutex.lock()
         try:
